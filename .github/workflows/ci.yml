@@ -1,0 +1,79 @@
+name: Check and deploy
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: zagl-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      NUXT_SITE_URL: ${{ vars.NUXT_SITE_URL || 'https://zagl.vercel.app' }}
+      NUXT_SITE_INDEXABLE: "true"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm run build
+      - run: npm run test:smoke
+      - uses: actions/upload-artifact@v4
+        with:
+          name: production-build
+          path: .output
+          include-hidden-files: true
+          retention-days: 7
+  deploy:
+    needs: check
+    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment: production
+    env:
+      VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+      VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
+      VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
+      NUXT_SITE_URL: ${{ vars.NUXT_SITE_URL }}
+      NUXT_SITE_INDEXABLE: "true"
+    steps:
+      - name: Check deployment configuration
+        id: config
+        shell: bash
+        run: |
+          if [ -n "$VERCEL_TOKEN" ] && [ -n "$VERCEL_ORG_ID" ] && [ -n "$VERCEL_PROJECT_ID" ] && [ -n "$NUXT_SITE_URL" ]; then
+            echo 'ready=true' >> "$GITHUB_OUTPUT"
+          else
+            echo 'ready=false' >> "$GITHUB_OUTPUT"
+            echo 'Deployment not configured. Set VERCEL_TOKEN, VERCEL_ORG_ID, VERCEL_PROJECT_ID secrets and NUXT_SITE_URL variable. See README.md.' >> "$GITHUB_STEP_SUMMARY"
+          fi
+      - uses: actions/checkout@v4
+        if: steps.config.outputs.ready == 'true'
+      - uses: actions/setup-node@v4
+        if: steps.config.outputs.ready == 'true'
+        with:
+          node-version: "24"
+          cache: npm
+      - name: Install locked dependencies
+        if: steps.config.outputs.ready == 'true'
+        run: npm ci
+      - name: Install Vercel CLI
+        if: steps.config.outputs.ready == 'true'
+        run: npm install --global vercel@63.1.2
+      - name: Pull production settings
+        if: steps.config.outputs.ready == 'true'
+        run: vercel pull --yes --environment=production --token="$VERCEL_TOKEN"
+      - name: Build for Vercel
+        if: steps.config.outputs.ready == 'true'
+        run: vercel build --prod --token="$VERCEL_TOKEN"
+      - name: Deploy production
+        if: steps.config.outputs.ready == 'true'
+        run: vercel deploy --prebuilt --prod --token="$VERCEL_TOKEN"
