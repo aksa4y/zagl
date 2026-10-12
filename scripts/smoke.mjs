@@ -14,8 +14,12 @@ const content = await readFile(
   new URL("../shared/content.ts", import.meta.url),
   "utf8",
 );
-const slugs = [...content.matchAll(/slug: '([^']+)'/g)].map(
+const slugs = [...content.matchAll(/slug:\s*["']([^"']+)["']/g)].map(
   (match) => match[1],
+);
+assert.ok(
+  slugs.length > 0,
+  "Article routes must be discovered for smoke checks",
 );
 const routes = [
   "/",
